@@ -24,3 +24,16 @@ export const registerSchema = z.object({
     })
     .optional(),
 });
+
+export const loginSchema = z.object({
+  email: z
+    .string()
+    .email({ message: "Invalid email address" })
+    .max(100, { message: "Email must be less than 100 characters" }),
+  password: z
+    .string()
+    .min(1, { message: "Password is required" })
+    .max(100, { message: "Password must be less than 100 characters" }),
+});
+
+export type LoginSchemaType = z.infer<typeof loginSchema>;

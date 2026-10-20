@@ -203,14 +203,6 @@ many incomplete screens.
                                       each milestone
   -----------------------------------------------------------------------
 
-### Important scope clarification
-
-The original plan used React with Vite. The latest explicit frontend
-decision is **Next.js**. Do not create a Vite application unless the
-actual existing repository already uses it and changing frameworks would
-be unnecessarily disruptive. Inspect the repository and reconcile this
-before scaffolding.
-
 ------------------------------------------------------------------------
 
 ## 4. Technology Stack and Boundaries
@@ -237,7 +229,7 @@ Next.js structure and document the choice.
 -   Prisma
 -   PostgreSQL
 -   JWT authentication
--   bcrypt password hashing
+-   argon password hashing
 
 Keep REST API responsibilities and Socket.IO event responsibilities
 clear. Use the authenticated user identity from the server-side auth

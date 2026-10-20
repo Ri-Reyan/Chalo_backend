@@ -5,3 +5,8 @@ export interface RegisterServicePayload {
   role: "CUSTOMER" | "DRIVER";
   vehicleType?: "CAR" | "BIKE";
 }
+
+export interface LoginServicePayload {
+  email: string;
+  password: string;
+}

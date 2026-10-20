@@ -1,5 +1,4 @@
 import { NextFunction, Request, Response } from "express";
-import AppError from "../global/AppError.js";
 import redis from "../lib/redis.js";
 import sendResponse from "../global/sendResponse.js";
 
