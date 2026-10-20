@@ -1,0 +1,37 @@
+enum RideStatus {
+  REQUESTED
+  ACCEPTED
+  COMPLETED
+  NO_DRIVER_FOUND
+}
+
+
+model Ride {
+  id              String      @id @default(uuid())
+  customerId      String
+  driverId        String?
+  pickupLat       Decimal     @db.Decimal(10, 7)
+  pickupLng       Decimal     @db.Decimal(10, 7)
+  destinationLat  Decimal     @db.Decimal(10, 7)
+  destinationLng  Decimal     @db.Decimal(10, 7)
+  vehicleType     VehicleType
+  distanceKm      Decimal     @db.Decimal(8, 2)
+  fare            Decimal     @db.Decimal(12, 2)
+  status          RideStatus  @default(REQUESTED)
+  currentRadiusKm Decimal     @default(3.00) @db.Decimal(6, 2)
+  createdAt       DateTime    @default(now())
+  acceptedAt      DateTime?
+  completedAt     DateTime?
+  updatedAt       DateTime    @updatedAt
+
+  // Relations
+  customer User     @relation("CustomerRides", fields: [customerId], references: [id], onDelete: Restrict)
+  driver   User?    @relation("DriverRides", fields: [driverId], references: [id], onDelete: SetNull)
+  payment  Payment?
+
+  @@index([customerId])
+  @@index([driverId])
+  @@index([status])
+  @@index([status, createdAt])
+  @@map("rides")
+}

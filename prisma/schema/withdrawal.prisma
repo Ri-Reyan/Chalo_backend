@@ -1,0 +1,27 @@
+enum PaymentStatus {
+  HELD
+  CAPTURED
+  REFUNDED
+}
+
+enum WithdrawalStatus {
+  PENDING
+  COMPLETED
+  REJECTED
+}
+
+model Withdrawal {
+  id        String           @id @default(uuid())
+  driverId  String
+  amount    Decimal          @db.Decimal(12, 2)
+  status    WithdrawalStatus @default(PENDING)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  // Relations
+  driver User @relation(fields: [driverId], references: [id], onDelete: Restrict)
+
+  @@index([driverId])
+  @@index([status])
+  @@map("withdrawals")
+}
