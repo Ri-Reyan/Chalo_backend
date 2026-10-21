@@ -4,9 +4,13 @@ import app from "./app.js";
 import credentials from "./config/credentials.js";
 import prisma from "./lib/prisma.js";
 import redis from "./lib/redis.js";
+import { initSocket } from "./lib/socket.js";
 
 const server = http.createServer(app);
 const port = credentials.port;
+
+// Initialize real-time Socket.IO communication
+initSocket(server);
 
 const main = async () => {
   try {

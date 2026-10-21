@@ -101,16 +101,12 @@ const getMe = catchAsync(async (req: Request, res: Response) => {
   // Fetch current user by authenticated user ID directly from database
   const user = await authService.getMeService(req.user.id);
 
-  // Return strictly name, email, and role
+  // Return authenticated user profile
   sendResponse(res, {
     success: true,
     statusCode: 200,
     message: "User fetched successfully",
-    data: {
-      name: user.name,
-      email: user.email,
-      role: user.role,
-    },
+    data: user,
   });
 });
 

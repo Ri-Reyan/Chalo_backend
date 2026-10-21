@@ -77,9 +77,13 @@ const getMeService = async (userId: string) => {
       id: userId,
     },
     select: {
+      id: true,
       name: true,
       email: true,
       role: true,
+      vehicleType: true,
+      balance: true,
+      isOnline: true,
     },
   });
 
