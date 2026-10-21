@@ -14,6 +14,7 @@ const credentials = {
   jwt_refresh_token_time: process.env.JWT_REFRESH_TOKEN_TIME || "7d",
   stripe_secret_key: process.env.STRIPE_SECRET_KEY,
   stripe_publishable_key: process.env.STRIPE_PUBLISHABLE_KEY,
+  client_url: process.env.CLIENT_URL,
 };
 
 export default credentials;

@@ -7,10 +7,15 @@ import authRouter from "./module/auth/auth.route.js";
 import rideRouter from "./module/customer/ride/ride.route.js";
 import driverRouter from "./module/driver/driver.route.js";
 import paymentRouter from "./module/customer/payment/payment.route.js";
+import credentials from "./config/credentials.js";
 
 const app = express();
 
-const allowedOrigins = ["http://localhost:3000", "http://127.0.0.1:3000"];
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  credentials.client_url,
+];
 
 app.use(
   cors({
