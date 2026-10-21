@@ -9,6 +9,8 @@ import {
   setPendingRide,
   getPendingRide,
   deletePendingRide,
+  setProcessedSession,
+  getProcessedSession,
 } from "./rideCache.service.js";
 import type {
   EstimateRideInput,
@@ -238,6 +240,24 @@ const confirmPaymentService = async (input: ConfirmPaymentInput) => {
 
   // Handle temporary ride stored in Redis
   if (rideId.startsWith("temp_")) {
+    // Check if ride was already created for this tempRideId
+    const existingRideId = await getProcessedSession(rideId);
+    if (existingRideId) {
+      const existing = await prisma.ride.findUnique({
+        where: { id: existingRideId },
+      });
+      if (existing) {
+        return {
+          rideId: existing.id,
+          fare: Number(existing.fare),
+          distanceKm: Number(existing.distanceKm),
+          vehicleType: existing.vehicleType,
+          status: existing.status,
+          createdAt: existing.createdAt.toISOString(),
+        };
+      }
+    }
+
     const pendingRide = await getPendingRide(rideId);
     if (!pendingRide) {
       throw new AppError(
@@ -245,6 +265,9 @@ const confirmPaymentService = async (input: ConfirmPaymentInput) => {
         404,
       );
     }
+
+    // Clean up Redis immediately to prevent double submission
+    await deletePendingRide(rideId);
 
     // Transactionally create permanent Ride and Payment records in PostgreSQL
     const [newRide, newPayment] = await prisma.$transaction(async (tx) => {
@@ -277,8 +300,7 @@ const confirmPaymentService = async (input: ConfirmPaymentInput) => {
       return [r, p];
     });
 
-    // Clean up Redis
-    await deletePendingRide(rideId);
+    await setProcessedSession(rideId, newRide.id);
 
     // Trigger radius matching to notify eligible drivers within 2km -> 4km
     matchingService.publishRideOffer(newRide.id).catch((err) => {
@@ -390,6 +412,9 @@ const acceptRideService = async (rideId: string, driverId: string) => {
     );
   }
 
+  // Clear all pending matching timers & timeouts for this ride immediately
+  matchingService.clearMatchingTimers(rideId);
+
   // Fetch updated ride details
   const updatedRide = await prisma.ride.findUnique({
     where: { id: rideId },
@@ -405,7 +430,7 @@ const acceptRideService = async (rideId: string, driverId: string) => {
 
   const driverPayload = {
     id: driver.id,
-    name: driver.name,
+    name: driver?.name || "Driver",
     vehicleModel:
       updatedRide.vehicleType === "BIKE"
         ? "Honda CB Hornet 160R"
@@ -428,8 +453,8 @@ const acceptRideService = async (rideId: string, driverId: string) => {
     vehicleType: updatedRide.vehicleType,
     driver: driverPayload,
     customer: {
-      id: updatedRide.customer.id,
-      name: updatedRide.customer.name,
+      id: updatedRide.customer?.id || updatedRide.customerId,
+      name: updatedRide.customer?.name || "Customer",
       rating: "5.0 ★",
     },
     acceptedAt: updatedRide.acceptedAt?.toISOString(),
@@ -615,6 +640,9 @@ const cancelRideService = async (rideId: string, cancelledByUserId?: string) => 
     throw new AppError("This ride is already cancelled.", 400);
   }
 
+  // Clear any pending matching or auto-cancellation timers
+  matchingService.clearMatchingTimers(rideId);
+
   await prisma.$transaction(async (tx) => {
     await tx.ride.update({
       where: { id: rideId },
@@ -681,14 +709,14 @@ const getActiveRideService = async (userId: string, role?: string) => {
     destinationLng: Number(ride.destinationLng),
     paymentStatus: ride.payment?.status || "HELD",
     customer: {
-      id: ride.customer.id,
-      name: ride.customer.name,
+      id: ride.customer?.id || ride.customerId,
+      name: ride.customer?.name || "Customer",
       rating: "5.0 ★",
     },
     driver: ride.driver
       ? {
           id: ride.driver.id,
-          name: ride.driver.name,
+          name: ride.driver.name || "Driver Partner",
           vehicleModel:
             ride.vehicleType === "BIKE"
               ? "Honda CB Hornet 160R"
@@ -737,7 +765,7 @@ const getAvailableRidesService = async (driverId?: string) => {
       distanceKm: Number(ride.distanceKm),
       grossFare,
       netEarnings,
-      customerName: ride.customer.name,
+      customerName: ride.customer?.name || "Customer",
       customerRating: "4.9",
       radiusKm: Number(ride.currentRadiusKm),
       createdAt: ride.createdAt.toISOString(),

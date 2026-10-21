@@ -163,10 +163,42 @@ const verifyPaymentSessionService = async (input: VerifyPaymentInput) => {
         status: existingRide.status,
         paymentStatus: existingRide.payment?.status || "HELD",
         customer: {
-          id: existingRide.customer.id,
-          name: existingRide.customer.name,
+          id: existingRide.customer?.id || existingRide.customerId,
+          name: existingRide.customer?.name || "Customer",
         },
       };
+    }
+  }
+
+  // Also check idempotency by tempRideId if already converted
+  const targetTempRideId =
+    input.tempRideId ||
+    (input.rideId?.startsWith("temp_") ? input.rideId : undefined);
+  if (targetTempRideId) {
+    const existingFromTemp = await getProcessedSession(targetTempRideId);
+    if (existingFromTemp) {
+      const existingRide = await prisma.ride.findUnique({
+        where: { id: existingFromTemp },
+        include: {
+          customer: true,
+          payment: true,
+        },
+      });
+
+      if (existingRide) {
+        return {
+          rideId: existingRide.id,
+          fare: Number(existingRide.fare),
+          distanceKm: Number(existingRide.distanceKm),
+          vehicleType: existingRide.vehicleType,
+          status: existingRide.status,
+          paymentStatus: existingRide.payment?.status || "HELD",
+          customer: {
+            id: existingRide.customer?.id || existingRide.customerId,
+            name: existingRide.customer?.name || "Customer",
+          },
+        };
+      }
     }
   }
 
@@ -195,9 +227,37 @@ const verifyPaymentSessionService = async (input: VerifyPaymentInput) => {
 
   // 3. If temporary ride in Redis: Create PostgreSQL records only after payment confirmation!
   if (tempRideId) {
+    // Check if a ride was already created for this tempRideId
+    const existingRideId = await getProcessedSession(tempRideId);
+    if (existingRideId) {
+      const existingRide = await prisma.ride.findUnique({
+        where: { id: existingRideId },
+        include: { customer: true, payment: true },
+      });
+      if (existingRide) {
+        await deletePendingRide(tempRideId);
+        await setProcessedSession(sessionId, existingRide.id);
+        return {
+          rideId: existingRide.id,
+          fare: Number(existingRide.fare),
+          distanceKm: Number(existingRide.distanceKm),
+          vehicleType: existingRide.vehicleType,
+          status: existingRide.status,
+          paymentStatus: existingRide.payment?.status || "HELD",
+          customer: {
+            id: existingRide.customer?.id || existingRide.customerId,
+            name: existingRide.customer?.name || "Customer",
+          },
+        };
+      }
+    }
+
     const pendingRide = await getPendingRide(tempRideId);
 
     if (pendingRide) {
+      // Clear the temporary payload immediately to prevent any concurrent duplicate insertion
+      await deletePendingRide(tempRideId);
+
       // Create Ride and Payment transactionally in PostgreSQL
       const [newRide, newPayment] = await prisma.$transaction(async (tx) => {
         const ride = await tx.ride.create({
@@ -229,11 +289,9 @@ const verifyPaymentSessionService = async (input: VerifyPaymentInput) => {
         return [ride, payment];
       });
 
-      // Clear the temporary payload from Redis
-      await deletePendingRide(tempRideId);
-
-      // Record session as processed for idempotency
+      // Record session and tempRideId as processed for idempotency
       await setProcessedSession(sessionId, newRide.id);
+      await setProcessedSession(tempRideId, newRide.id);
 
       // Trigger 2.0 km radius matching engine (expands to 4.0 km after 30s)
       matchingService.publishRideOffer(newRide.id).catch((err) => {
@@ -266,8 +324,8 @@ const verifyPaymentSessionService = async (input: VerifyPaymentInput) => {
         pickup: pendingRide.pickup,
         destination: pendingRide.destination,
         customer: {
-          id: newRide.customer.id,
-          name: newRide.customer.name,
+          id: newRide.customer?.id || newRide.customerId,
+          name: newRide.customer?.name || "Customer",
         },
       };
     }
@@ -338,8 +396,8 @@ const verifyPaymentSessionService = async (input: VerifyPaymentInput) => {
     status: "REQUESTED",
     paymentStatus: "HELD",
     customer: {
-      id: ride.customer.id,
-      name: ride.customer.name,
+      id: ride.customer?.id || ride.customerId,
+      name: ride.customer?.name || "Customer",
     },
   };
 };
