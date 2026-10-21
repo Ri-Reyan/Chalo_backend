@@ -12,6 +12,6 @@ paymentRouter.get(
   "/verify/:sessionId",
   paymentController.verifyPaymentSession,
 );
+paymentRouter.post("/webhook", paymentController.handleWebhook);
 
 export default paymentRouter;
-

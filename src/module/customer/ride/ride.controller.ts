@@ -72,7 +72,14 @@ const confirmPayment = catchAsync(async (req: Request, res: Response) => {
 
 const acceptRide = catchAsync(async (req: Request, res: Response) => {
   const rideId = Array.isArray(req.params.id) ? req.params.id[0] : (req.params.id as string);
-  let driverId = (req as any).user?.id || req.body.driverId;
+  const user = (req as any).user;
+  const body = req.body || {};
+
+  let driverId: string | undefined =
+    user?.id ||
+    user?.driverId ||
+    body.driverId ||
+    (typeof req.query.driverId === "string" ? req.query.driverId : undefined);
 
   // Fallback to first registered driver in DB if testing without JWT header
   if (!driverId) {
@@ -98,7 +105,8 @@ const acceptRide = catchAsync(async (req: Request, res: Response) => {
 
 const driverArrived = catchAsync(async (req: Request, res: Response) => {
   const rideId = Array.isArray(req.params.id) ? req.params.id[0] : (req.params.id as string);
-  const driverId = (req as any).user?.id;
+  const user = (req as any).user;
+  const driverId = user?.id || user?.driverId || req.body?.driverId;
 
   const data = await rideService.driverArrivedService(rideId, driverId);
 
@@ -112,7 +120,8 @@ const driverArrived = catchAsync(async (req: Request, res: Response) => {
 
 const startRide = catchAsync(async (req: Request, res: Response) => {
   const rideId = Array.isArray(req.params.id) ? req.params.id[0] : (req.params.id as string);
-  const driverId = (req as any).user?.id;
+  const user = (req as any).user;
+  const driverId = user?.id || user?.driverId || req.body?.driverId;
 
   const data = await rideService.startRideService(rideId, driverId);
 
@@ -126,7 +135,8 @@ const startRide = catchAsync(async (req: Request, res: Response) => {
 
 const completeRide = catchAsync(async (req: Request, res: Response) => {
   const rideId = Array.isArray(req.params.id) ? req.params.id[0] : (req.params.id as string);
-  const customerId = (req as any).user?.id;
+  const user = (req as any).user;
+  const customerId = user?.id || req.body?.customerId;
 
   const data = await rideService.completeRideService(rideId, customerId);
 
@@ -140,7 +150,8 @@ const completeRide = catchAsync(async (req: Request, res: Response) => {
 
 const cancelRide = catchAsync(async (req: Request, res: Response) => {
   const rideId = Array.isArray(req.params.id) ? req.params.id[0] : (req.params.id as string);
-  const userId = (req as any).user?.id;
+  const user = (req as any).user;
+  const userId = user?.id || req.body?.userId;
 
   const data = await rideService.cancelRideService(rideId, userId);
 
@@ -153,8 +164,9 @@ const cancelRide = catchAsync(async (req: Request, res: Response) => {
 });
 
 const getActiveRide = catchAsync(async (req: Request, res: Response) => {
-  const userId = (req as any).user?.id || (req.query.userId as string);
-  const role = (req as any).user?.role || (req.query.role as string);
+  const user = (req as any).user;
+  const userId = user?.id || (req.query.userId as string);
+  const role = user?.role || (req.query.role as string);
 
   if (!userId) {
     sendResponse(res, {
@@ -177,7 +189,8 @@ const getActiveRide = catchAsync(async (req: Request, res: Response) => {
 });
 
 const getAvailableRides = catchAsync(async (req: Request, res: Response) => {
-  const driverId = (req as any).user?.id;
+  const user = (req as any).user;
+  const driverId = user?.id || user?.driverId || (req.query.driverId as string);
   const data = await rideService.getAvailableRidesService(driverId);
 
   sendResponse(res, {

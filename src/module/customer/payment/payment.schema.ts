@@ -1,7 +1,8 @@
 import z from "zod";
 
 export const createCheckoutSessionSchema = z.object({
-  rideId: z.string().min(1, { message: "Ride ID is required" }),
+  rideId: z.string().nullable().optional(),
+  tempRideId: z.string().nullable().optional(),
   fare: z.number().optional(),
   pickup: z.string().optional(),
   destination: z.string().optional(),
@@ -10,7 +11,8 @@ export const createCheckoutSessionSchema = z.object({
 
 export const verifyPaymentSchema = z.object({
   sessionId: z.string().min(1, { message: "Stripe Session ID is required" }),
-  rideId: z.string().optional(),
+  rideId: z.string().nullable().optional(),
+  tempRideId: z.string().nullable().optional(),
 });
 
 export type CreateCheckoutSessionInput = z.infer<

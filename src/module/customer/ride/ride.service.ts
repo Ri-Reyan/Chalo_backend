@@ -1,9 +1,15 @@
+import crypto from "crypto";
 import calculateHaversineDistance from "../../../utils/haversine.js";
 import prisma from "../../../lib/prisma.js";
 import AppError from "../../../global/AppError.js";
 import stripe from "../../../lib/stripe.js";
 import { emitToRide, emitToUser, emitToDrivers } from "../../../lib/socket.js";
 import matchingService from "../../matching/matching.service.js";
+import {
+  setPendingRide,
+  getPendingRide,
+  deletePendingRide,
+} from "./rideCache.service.js";
 import type {
   EstimateRideInput,
   CreateRideInput,
@@ -41,7 +47,8 @@ export interface EstimateRideResult {
 
 export interface CreateRideResult {
   rideId: string;
-  paymentId: string;
+  tempRideId?: string;
+  paymentId?: string;
   fare: number;
   distanceKm: number;
   vehicleType: "BIKE" | "CAR";
@@ -93,6 +100,11 @@ const estimateRideService = async (
   };
 };
 
+/**
+ * Step 1: Pre-Payment Pending Ride Request
+ * Stores temporary ride payload in Redis with a 15-minute TTL.
+ * Crucially: DOES NOT insert into PostgreSQL until payment is confirmed!
+ */
 const createRideService = async (
   input: CreateRideInput,
   authenticatedUserId?: string,
@@ -140,39 +152,33 @@ const createRideService = async (
     }
   }
 
-  // Create Ride and Payment transactionally
-  const [ride, payment] = await prisma.$transaction(async (tx) => {
-    const newRide = await tx.ride.create({
-      data: {
-        customerId: customerId!,
-        pickupLat,
-        pickupLng,
-        destinationLat,
-        destinationLng,
-        vehicleType,
-        distanceKm,
-        fare,
-        status: "REQUESTED",
-        currentRadiusKm: 2.0,
-      },
-    });
+  // Generate unique temporary ride ID for Redis
+  const tempRideId = `temp_${crypto.randomUUID()}`;
 
-    const newPayment = await tx.payment.create({
-      data: {
-        rideId: newRide.id,
-        amount: fare,
-        status: "HELD",
-      },
-    });
-
-    return [newRide, newPayment];
+  // Store pre-payment payload in Redis (15 minutes TTL)
+  await setPendingRide(tempRideId, {
+    tempRideId,
+    customerId: customerId!,
+    pickup,
+    destination,
+    pickupLat,
+    pickupLng,
+    destinationLat,
+    destinationLng,
+    vehicleType,
+    distanceKm,
+    fare,
+    createdAt: new Date().toISOString(),
   });
 
-  let checkoutUrl = `/checkout?rideId=${ride.id}&amount=${fare}&distanceKm=${distanceKm}&vehicleType=${vehicleType}&pickup=${encodeURIComponent(pickup)}&destination=${encodeURIComponent(destination)}`;
+  // Client checkout fallback URL in case Stripe SDK is not configured
+  let checkoutUrl = `/checkout?tempRideId=${tempRideId}&amount=${fare}&distanceKm=${distanceKm}&vehicleType=${vehicleType}&pickup=${encodeURIComponent(pickup)}&destination=${encodeURIComponent(destination)}`;
 
   try {
     const clientBaseUrl = process.env.CLIENT_URL || "http://localhost:3000";
     const unitAmount = Math.max(50, Math.round(fare * 100));
+
+    // Create real Stripe Checkout Session referencing temporary Redis ride ID
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       line_items: [
@@ -188,13 +194,17 @@ const createRideService = async (
           quantity: 1,
         },
       ],
+      client_reference_id: tempRideId,
       metadata: {
-        rideId: ride.id,
+        tempRideId,
+        customerId: customerId!,
         vehicleType,
         fare: String(fare),
+        pickup,
+        destination,
       },
-      success_url: `${clientBaseUrl}/customer/payment/success?session_id={CHECKOUT_SESSION_ID}&ride_id=${ride.id}`,
-      cancel_url: `${clientBaseUrl}/customer/payment/cancel?ride_id=${ride.id}`,
+      success_url: `${clientBaseUrl}/customer/payment/success?session_id={CHECKOUT_SESSION_ID}&temp_ride_id=${tempRideId}`,
+      cancel_url: `${clientBaseUrl}/customer/payment/cancel?temp_ride_id=${tempRideId}`,
     });
 
     if (session.url) {
@@ -205,25 +215,99 @@ const createRideService = async (
   }
 
   return {
-    rideId: ride.id,
-    paymentId: payment.id,
+    rideId: tempRideId,
+    tempRideId,
+    paymentId: "pending_payment",
     fare,
     distanceKm,
     vehicleType,
     pickup,
     destination,
-    status: ride.status,
+    status: "PENDING_PAYMENT",
     checkoutUrl,
   };
 };
 
 /**
  * Step 2: Payment Verified / Held
- * Triggers Radius Matching Engine to publish ride offers to nearby online drivers.
+ * Creates PostgreSQL record if from Redis, or updates status to HELD,
+ * then triggers Radius Matching Engine to publish ride offers to nearby online drivers.
  */
 const confirmPaymentService = async (input: ConfirmPaymentInput) => {
   const { rideId } = input;
 
+  // Handle temporary ride stored in Redis
+  if (rideId.startsWith("temp_")) {
+    const pendingRide = await getPendingRide(rideId);
+    if (!pendingRide) {
+      throw new AppError(
+        "Pending ride session not found or expired in cache. Please request again.",
+        404,
+      );
+    }
+
+    // Transactionally create permanent Ride and Payment records in PostgreSQL
+    const [newRide, newPayment] = await prisma.$transaction(async (tx) => {
+      const r = await tx.ride.create({
+        data: {
+          customerId: pendingRide.customerId,
+          pickupLat: pendingRide.pickupLat,
+          pickupLng: pendingRide.pickupLng,
+          destinationLat: pendingRide.destinationLat,
+          destinationLng: pendingRide.destinationLng,
+          vehicleType: pendingRide.vehicleType,
+          distanceKm: pendingRide.distanceKm,
+          fare: pendingRide.fare,
+          status: "REQUESTED",
+          currentRadiusKm: 2.0,
+        },
+        include: {
+          customer: true,
+        },
+      });
+
+      const p = await tx.payment.create({
+        data: {
+          rideId: r.id,
+          amount: pendingRide.fare,
+          status: "HELD",
+        },
+      });
+
+      return [r, p];
+    });
+
+    // Clean up Redis
+    await deletePendingRide(rideId);
+
+    // Trigger radius matching to notify eligible drivers within 2km -> 4km
+    matchingService.publishRideOffer(newRide.id).catch((err) => {
+      console.error("Failed to publish ride offer:", err);
+    });
+
+    emitToRide(newRide.id, "ride:published", {
+      rideId: newRide.id,
+      status: "REQUESTED",
+      radiusKm: 2.0,
+    });
+
+    emitToUser(newRide.customerId, "ride:published", {
+      rideId: newRide.id,
+      status: "REQUESTED",
+      radiusKm: 2.0,
+    });
+
+    return {
+      rideId: newRide.id,
+      fare: Number(newRide.fare),
+      distanceKm: Number(newRide.distanceKm),
+      vehicleType: newRide.vehicleType,
+      status: newRide.status,
+      createdAt: newRide.createdAt.toISOString(),
+    };
+  }
+
+  // Handle existing database ride
   const ride = await prisma.ride.findUnique({
     where: { id: rideId },
     include: {
@@ -251,6 +335,12 @@ const confirmPaymentService = async (input: ConfirmPaymentInput) => {
   });
 
   emitToRide(ride.id, "ride:published", {
+    rideId: ride.id,
+    status: "REQUESTED",
+    radiusKm: 2.0,
+  });
+
+  emitToUser(ride.customerId, "ride:published", {
     rideId: ride.id,
     status: "REQUESTED",
     radiusKm: 2.0,
@@ -489,6 +579,16 @@ const completeRideService = async (rideId: string, customerId?: string) => {
  * Ride Cancellation
  */
 const cancelRideService = async (rideId: string, cancelledByUserId?: string) => {
+  // If this is a temporary pre-payment ride stored in Redis
+  if (rideId.startsWith("temp_")) {
+    await deletePendingRide(rideId);
+    return {
+      rideId,
+      status: "CANCELLED",
+      message: "Pending ride request cancelled successfully.",
+    };
+  }
+
   const ride = await prisma.ride.findUnique({
     where: { id: rideId },
     include: { payment: true },
@@ -498,8 +598,21 @@ const cancelRideService = async (rideId: string, cancelledByUserId?: string) => 
     throw new AppError("Ride not found.", 404);
   }
 
+  // Authorization check if userId is provided
+  if (
+    cancelledByUserId &&
+    ride.customerId !== cancelledByUserId &&
+    ride.driverId !== cancelledByUserId
+  ) {
+    throw new AppError("You are not authorized to cancel this ride.", 403);
+  }
+
   if (ride.status === "COMPLETED") {
     throw new AppError("Completed rides cannot be cancelled.", 400);
+  }
+
+  if (ride.status === "NO_DRIVER_FOUND") {
+    throw new AppError("This ride is already cancelled.", 400);
   }
 
   await prisma.$transaction(async (tx) => {
@@ -522,7 +635,14 @@ const cancelRideService = async (rideId: string, cancelledByUserId?: string) => 
     message: "Ride was cancelled and held payment has been refunded.",
   };
 
+  // Broadcast to ride room, customer, and driver (if assigned)
   emitToRide(rideId, "ride:cancelled", cancelPayload);
+  emitToUser(ride.customerId, "ride:cancelled", cancelPayload);
+  if (ride.driverId) {
+    emitToUser(ride.driverId, "ride:cancelled", cancelPayload);
+  }
+
+  // Clear request card from online driver pools
   emitToDrivers("ride:taken", { rideId });
 
   return cancelPayload;

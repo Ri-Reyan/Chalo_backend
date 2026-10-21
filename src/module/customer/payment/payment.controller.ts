@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
-import catchAsync from "../../global/catchAsync.js";
-import AppError from "../../global/AppError.js";
-import sendResponse from "../../global/sendResponse.js";
+import catchAsync from "../../../global/catchAsync.js";
+import AppError from "../../../global/AppError.js";
+import sendResponse from "../../../global/sendResponse.js";
 import {
   createCheckoutSessionSchema,
   verifyPaymentSchema,
@@ -30,11 +30,16 @@ const createCheckoutSession = catchAsync(
 const verifyPaymentSession = catchAsync(async (req: Request, res: Response) => {
   const sessionId =
     (req.params.sessionId as string) || (req.body.sessionId as string);
-  const rideId = req.query.rideId as string | undefined;
+  const rideId = (req.query.rideId as string) || req.body.rideId;
+  const tempRideId =
+    (req.query.temp_ride_id as string) ||
+    (req.query.tempRideId as string) ||
+    req.body.tempRideId;
 
   const result = verifyPaymentSchema.safeParse({
     sessionId,
     rideId,
+    tempRideId,
   });
 
   if (!result.success) {
@@ -51,10 +56,31 @@ const verifyPaymentSession = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const handleWebhook = catchAsync(async (req: Request, res: Response) => {
+  const event = req.body;
+
+  if (event?.type === "checkout.session.completed") {
+    const session = event.data?.object;
+    if (session?.id) {
+      const tempRideId =
+        session.metadata?.tempRideId || session.client_reference_id;
+      const rideId = session.metadata?.rideId;
+
+      await paymentService.verifyPaymentSessionService({
+        sessionId: session.id,
+        tempRideId,
+        rideId,
+      });
+    }
+  }
+
+  res.status(200).json({ received: true });
+});
+
 export const paymentController = {
   createCheckoutSession,
   verifyPaymentSession,
+  handleWebhook,
 };
 
 export default paymentController;
-
