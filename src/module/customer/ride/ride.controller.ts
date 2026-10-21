@@ -201,6 +201,31 @@ const getAvailableRides = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const getRideHistory = catchAsync(async (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const userId = user?.id || user?.driverId || (req.query.userId as string);
+  const role = (req.query.role as string) || user?.role || "CUSTOMER";
+
+  if (!userId) {
+    sendResponse(res, {
+      success: true,
+      statusCode: 200,
+      message: "No user authenticated",
+      data: [],
+    });
+    return;
+  }
+
+  const data = await rideService.getRideHistoryService(userId, role);
+
+  sendResponse(res, {
+    success: true,
+    statusCode: 200,
+    message: "Ride history retrieved successfully",
+    data,
+  });
+});
+
 export const rideController = {
   estimateRide,
   createRide,
@@ -212,6 +237,7 @@ export const rideController = {
   cancelRide,
   getActiveRide,
   getAvailableRides,
+  getRideHistory,
 };
 
 export default rideController;

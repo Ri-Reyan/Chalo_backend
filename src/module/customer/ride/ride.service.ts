@@ -773,6 +773,71 @@ const getAvailableRidesService = async (driverId?: string) => {
   });
 };
 
+/**
+ * Get ride history for Customer or Driver
+ */
+const getRideHistoryService = async (userId: string, role?: string) => {
+  const isDriver = role === "DRIVER";
+  const whereClause = isDriver
+    ? { driverId: userId, status: { in: ["COMPLETED" as const, "NO_DRIVER_FOUND" as const] } }
+    : { customerId: userId, status: { in: ["COMPLETED" as const, "NO_DRIVER_FOUND" as const] } };
+
+  const rides = await prisma.ride.findMany({
+    where: whereClause,
+    include: {
+      customer: true,
+      driver: true,
+      payment: true,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  return rides.map((ride) => {
+    const grossFare = Number(ride.fare);
+    const netEarnings = Number((grossFare * 0.9).toFixed(2));
+    return {
+      id: ride.id,
+      pickup: "Pickup Point",
+      destination: "Drop-off Destination",
+      pickupLat: Number(ride.pickupLat),
+      pickupLng: Number(ride.pickupLng),
+      destinationLat: Number(ride.destinationLat),
+      destinationLng: Number(ride.destinationLng),
+      vehicleType: ride.vehicleType,
+      distanceKm: Number(ride.distanceKm),
+      fare: grossFare,
+      grossFare,
+      netEarnings,
+      status: ride.status,
+      paymentStatus: ride.payment?.status || "HELD",
+      customer: {
+        id: ride.customer?.id || ride.customerId,
+        name: ride.customer?.name || "Customer",
+        rating: "5.0 ★",
+      },
+      driver: ride.driver
+        ? {
+            id: ride.driver.id,
+            name: ride.driver.name || "Driver Partner",
+            vehicleModel:
+              ride.vehicleType === "BIKE"
+                ? "Honda CB Hornet 160R"
+                : "Toyota Corolla Axio (Hybrid)",
+            rating: "4.9 ★",
+            plateNumber:
+              ride.vehicleType === "BIKE"
+                ? "DHAKA METRO-HA 4821"
+                : "DHAKA METRO-GA 7392",
+            etaMinutes: 3,
+          }
+        : null,
+      createdAt: ride.createdAt.toISOString(),
+      acceptedAt: ride.acceptedAt?.toISOString() || null,
+      completedAt: ride.completedAt?.toISOString() || null,
+    };
+  });
+};
+
 export const rideService = {
   estimateRideService,
   createRideService,
@@ -784,6 +849,7 @@ export const rideService = {
   cancelRideService,
   getActiveRideService,
   getAvailableRidesService,
+  getRideHistoryService,
 };
 
 export default rideService;

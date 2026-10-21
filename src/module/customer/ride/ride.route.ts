@@ -15,6 +15,7 @@ rideRouter.post("/:id/pay", rideController.confirmPayment);
 rideRouter.post("/", authMidleware.verifyUser, rideController.createRide);
 rideRouter.get("/active", authMidleware.verifyUser, rideController.getActiveRide);
 rideRouter.get("/available", authMidleware.verifyUser, rideController.getAvailableRides);
+rideRouter.get("/history", authMidleware.verifyUser, rideController.getRideHistory);
 
 // Driver Lifecycle Steps
 rideRouter.post(
