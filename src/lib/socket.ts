@@ -21,12 +21,17 @@ export const initSocket = (server: HttpServer): SocketIOServer => {
     const query = socket.handshake.query;
     const initialUserId = query.userId as string | undefined;
     const initialRole = query.role as string | undefined;
+    const initialRideId = query.rideId as string | undefined;
 
     if (initialUserId) {
       socket.join(`user:${initialUserId}`);
       if (initialRole === "DRIVER") {
         socket.join("drivers:online");
       }
+    }
+
+    if (initialRideId) {
+      socket.join(`ride:${initialRideId}`);
     }
 
     // Client explicitly joins personal user notification channel
