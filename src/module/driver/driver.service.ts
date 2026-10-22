@@ -103,14 +103,30 @@ const getBalanceService = async (authenticatedUserId?: string) => {
   };
 };
 
+const getWithdrawalsService = async (authenticatedUserId?: string) => {
+  const driverId = await resolveDriverId(authenticatedUserId);
+  const withdrawals = await prisma.withdrawal.findMany({
+    where: { driverId },
+    orderBy: { createdAt: "desc" },
+  });
+
+  return withdrawals.map((w) => ({
+    id: w.id,
+    amount: Number(w.amount),
+    status: w.status,
+    createdAt: w.createdAt.toISOString(),
+    updatedAt: w.updatedAt.toISOString(),
+  }));
+};
+
 const createWithdrawalService = async (
   input: CreateWithdrawalInput,
   authenticatedUserId?: string,
 ) => {
   const driverId = await resolveDriverId(authenticatedUserId || input.driverId);
-  const requestedAmount = input.amount;
+  const requestedAmount = Number(input.amount);
 
-  if (requestedAmount < 10) {
+  if (isNaN(requestedAmount) || requestedAmount < 10) {
     throw new AppError("Minimum withdrawal threshold is $10.00", 400);
   }
 
@@ -124,6 +140,10 @@ const createWithdrawalService = async (
       throw new AppError("Driver account not found.", 404);
     }
 
+    if (driver.role !== "DRIVER") {
+      throw new AppError("Only verified drivers can request withdrawals.", 403);
+    }
+
     const currentBalance = Number(driver.balance);
     if (currentBalance < requestedAmount) {
       throw new AppError(
@@ -132,7 +152,7 @@ const createWithdrawalService = async (
       );
     }
 
-    // 1. Deduct balance
+    // 1. Deduct balance from driver's account
     const updatedDriver = await tx.user.update({
       where: { id: driverId },
       data: {
@@ -142,7 +162,7 @@ const createWithdrawalService = async (
       },
     });
 
-    // 2. Create Withdrawal record
+    // 2. Create Withdrawal record with status PENDING
     const created = await tx.withdrawal.create({
       data: {
         driverId,
@@ -152,11 +172,14 @@ const createWithdrawalService = async (
     });
 
     return {
+      id: created.id,
       withdrawalId: created.id,
+      driverId: created.driverId,
       amount: Number(created.amount),
       status: created.status,
       remainingBalance: Number(updatedDriver.balance),
       createdAt: created.createdAt.toISOString(),
+      updatedAt: created.updatedAt.toISOString(),
     };
   });
 
@@ -167,6 +190,7 @@ export const driverService = {
   updateStatusService,
   updateLocationService,
   getBalanceService,
+  getWithdrawalsService,
   createWithdrawalService,
 };
 

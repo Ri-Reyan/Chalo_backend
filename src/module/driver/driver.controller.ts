@@ -63,6 +63,18 @@ const getBalance = catchAsync(async (req: Request, res: Response) => {
   });
 });
 
+const getWithdrawals = catchAsync(async (req: Request, res: Response) => {
+  const authenticatedUserId = (req as any).user?.id || (req.query.driverId as string);
+  const data = await driverService.getWithdrawalsService(authenticatedUserId);
+
+  sendResponse(res, {
+    success: true,
+    statusCode: 200,
+    message: "Driver withdrawals history retrieved successfully",
+    data,
+  });
+});
+
 const createWithdrawal = catchAsync(async (req: Request, res: Response) => {
   const result = createWithdrawalSchema.safeParse(req.body);
 
@@ -88,6 +100,7 @@ export const driverController = {
   updateStatus,
   updateLocation,
   getBalance,
+  getWithdrawals,
   createWithdrawal,
 };
 

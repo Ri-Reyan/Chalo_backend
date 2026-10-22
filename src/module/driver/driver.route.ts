@@ -22,6 +22,12 @@ driverRouter.get(
   authMidleware.verifyRole("DRIVER"),
   driverController.getBalance,
 );
+driverRouter.get(
+  "/withdrawals",
+  authMidleware.verifyUser,
+  authMidleware.verifyRole("DRIVER"),
+  driverController.getWithdrawals,
+);
 driverRouter.post(
   "/withdrawals",
   authMidleware.verifyUser,

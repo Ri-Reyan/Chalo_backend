@@ -12,7 +12,9 @@ export const updateLocationSchema = z.object({
 });
 
 export const createWithdrawalSchema = z.object({
-  amount: z.number().min(10, { message: "Minimum withdrawal amount is $10.00" }),
+  amount: z.coerce.number().min(10, { message: "Minimum withdrawal amount is $10.00" }),
+  method: z.string().optional(),
+  accountNumber: z.string().optional(),
   driverId: z.string().optional(),
 });
 
