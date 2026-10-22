@@ -3,6 +3,7 @@ enum RideStatus {
   ACCEPTED
   COMPLETED
   NO_DRIVER_FOUND
+  CANCELLED
 }
 
 

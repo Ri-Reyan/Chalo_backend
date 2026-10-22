@@ -136,9 +136,9 @@ const startRide = catchAsync(async (req: Request, res: Response) => {
 const completeRide = catchAsync(async (req: Request, res: Response) => {
   const rideId = Array.isArray(req.params.id) ? req.params.id[0] : (req.params.id as string);
   const user = (req as any).user;
-  const customerId = user?.id || req.body?.customerId;
+  const userId = user?.id || req.body?.userId || req.body?.customerId;
 
-  const data = await rideService.completeRideService(rideId, customerId);
+  const data = await rideService.completeRideService(rideId, userId);
 
   sendResponse(res, {
     success: true,
@@ -191,7 +191,11 @@ const getActiveRide = catchAsync(async (req: Request, res: Response) => {
 const getAvailableRides = catchAsync(async (req: Request, res: Response) => {
   const user = (req as any).user;
   const driverId = user?.id || user?.driverId || (req.query.driverId as string);
-  const data = await rideService.getAvailableRidesService(driverId);
+  const vehicleType =
+    (req.query.vehicleType as string) ||
+    (req.query.vehicle as string) ||
+    user?.vehicleType;
+  const data = await rideService.getAvailableRidesService(driverId, vehicleType);
 
   sendResponse(res, {
     success: true,

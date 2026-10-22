@@ -3,7 +3,12 @@ import calculateHaversineDistance from "../../../utils/haversine.js";
 import prisma from "../../../lib/prisma.js";
 import AppError from "../../../global/AppError.js";
 import stripe from "../../../lib/stripe.js";
-import { emitToRide, emitToUser, emitToDrivers } from "../../../lib/socket.js";
+import {
+  emitToRide,
+  emitToUser,
+  emitToDrivers,
+  emitToDriverVehicle,
+} from "../../../lib/socket.js";
 import matchingService from "../../matching/matching.service.js";
 import {
   setPendingRide,
@@ -204,6 +209,11 @@ const createRideService = async (
         fare: String(fare),
         pickup,
         destination,
+        pickupLat: String(pickupLat),
+        pickupLng: String(pickupLng),
+        destinationLat: String(destinationLat),
+        destinationLng: String(destinationLng),
+        distanceKm: String(distanceKm),
       },
       success_url: `${clientBaseUrl}/customer/payment/success?session_id={CHECKOUT_SESSION_ID}&temp_ride_id=${tempRideId}`,
       cancel_url: `${clientBaseUrl}/customer/payment/cancel?temp_ride_id=${tempRideId}`,
@@ -253,6 +263,10 @@ const confirmPaymentService = async (input: ConfirmPaymentInput) => {
           distanceKm: Number(existing.distanceKm),
           vehicleType: existing.vehicleType,
           status: existing.status,
+          pickupLat: Number(existing.pickupLat),
+          pickupLng: Number(existing.pickupLng),
+          destinationLat: Number(existing.destinationLat),
+          destinationLng: Number(existing.destinationLng),
           createdAt: existing.createdAt.toISOString(),
         };
       }
@@ -307,6 +321,33 @@ const confirmPaymentService = async (input: ConfirmPaymentInput) => {
       console.error("Failed to publish ride offer:", err);
     });
 
+    const immediatePayload = {
+      id: newRide.id,
+      rideId: newRide.id,
+      pickup: pendingRide.pickup,
+      destination: pendingRide.destination,
+      pickupLat: Number(newRide.pickupLat),
+      pickupLng: Number(newRide.pickupLng),
+      destinationLat: Number(newRide.destinationLat),
+      destinationLng: Number(newRide.destinationLng),
+      vehicleType: newRide.vehicleType,
+      distanceKm: Number(newRide.distanceKm),
+      pickupDistanceKm: 0.5,
+      fare: Number(newRide.fare),
+      grossFare: Number(newRide.fare),
+      netEarnings: Number((Number(newRide.fare) * 0.9).toFixed(2)),
+      status: "REQUESTED",
+      customerName: newRide.customer?.name || "Customer",
+      customerRating: "4.9 ★",
+      createdAt: newRide.createdAt.toISOString(),
+      expiresInSeconds: 30,
+    };
+
+    emitToDrivers("ride:requested", immediatePayload, newRide.vehicleType);
+    emitToDrivers("ride:broadcast", immediatePayload, newRide.vehicleType);
+    emitToDriverVehicle(newRide.vehicleType, "ride:requested", immediatePayload);
+    emitToDriverVehicle(newRide.vehicleType, "ride:broadcast", immediatePayload);
+
     emitToRide(newRide.id, "ride:published", {
       rideId: newRide.id,
       status: "REQUESTED",
@@ -325,6 +366,12 @@ const confirmPaymentService = async (input: ConfirmPaymentInput) => {
       distanceKm: Number(newRide.distanceKm),
       vehicleType: newRide.vehicleType,
       status: newRide.status,
+      pickup: pendingRide.pickup,
+      destination: pendingRide.destination,
+      pickupLat: Number(newRide.pickupLat),
+      pickupLng: Number(newRide.pickupLng),
+      destinationLat: Number(newRide.destinationLat),
+      destinationLng: Number(newRide.destinationLng),
       createdAt: newRide.createdAt.toISOString(),
     };
   }
@@ -355,6 +402,33 @@ const confirmPaymentService = async (input: ConfirmPaymentInput) => {
   matchingService.publishRideOffer(ride.id).catch((err) => {
     console.error("Failed to publish ride offer:", err);
   });
+
+  const immediateExistingPayload = {
+    id: ride.id,
+    rideId: ride.id,
+    pickup: (ride as any).pickup || "Pickup Location",
+    destination: (ride as any).destination || "Destination Drop-off",
+    pickupLat: Number(ride.pickupLat),
+    pickupLng: Number(ride.pickupLng),
+    destinationLat: Number(ride.destinationLat),
+    destinationLng: Number(ride.destinationLng),
+    vehicleType: ride.vehicleType,
+    distanceKm: Number(ride.distanceKm),
+    pickupDistanceKm: 0.5,
+    fare: Number(ride.fare),
+    grossFare: Number(ride.fare),
+    netEarnings: Number((Number(ride.fare) * 0.9).toFixed(2)),
+    status: "REQUESTED",
+    customerName: ride.customer?.name || "Customer",
+    customerRating: "4.9 ★",
+    createdAt: ride.createdAt.toISOString(),
+    expiresInSeconds: 30,
+  };
+
+  emitToDrivers("ride:requested", immediateExistingPayload, ride.vehicleType);
+  emitToDrivers("ride:broadcast", immediateExistingPayload, ride.vehicleType);
+  emitToDriverVehicle(ride.vehicleType, "ride:requested", immediateExistingPayload);
+  emitToDriverVehicle(ride.vehicleType, "ride:broadcast", immediateExistingPayload);
 
   emitToRide(ride.id, "ride:published", {
     rideId: ride.id,
@@ -390,6 +464,18 @@ const acceptRideService = async (rideId: string, driverId: string) => {
 
   if (!driver || driver.role !== "DRIVER") {
     throw new AppError("Only verified drivers can accept rides.", 403);
+  }
+
+  // Prevent drivers from accepting multiple simultaneous rides
+  const existingActiveRide = await prisma.ride.findFirst({
+    where: {
+      driverId,
+      status: { in: ["REQUESTED", "ACCEPTED"] },
+    },
+  });
+
+  if (existingActiveRide) {
+    throw new AppError("You already have an active ride in progress.", 400);
   }
 
   // Atomic update
@@ -446,7 +532,10 @@ const acceptRideService = async (rideId: string, driverId: string) => {
   };
 
   const responsePayload = {
+    id: updatedRide.id,
     rideId: updatedRide.id,
+    pickup: (updatedRide as any).pickup || "Pickup Point",
+    destination: (updatedRide as any).destination || "Drop-off Location",
     status: updatedRide.status,
     fare: Number(updatedRide.fare),
     distanceKm: Number(updatedRide.distanceKm),
@@ -490,6 +579,10 @@ const driverArrivedService = async (rideId: string, driverId?: string) => {
     throw new AppError("Ride is not in ACCEPTED status.", 400);
   }
 
+  if (!driverId || ride.driverId !== driverId) {
+    throw new AppError("You are not authorized to update this ride.", 403);
+  }
+
   const payload = {
     rideId,
     status: "DRIVER_ARRIVED",
@@ -514,6 +607,14 @@ const startRideService = async (rideId: string, driverId?: string) => {
     throw new AppError("Ride not found.", 404);
   }
 
+  if (ride.status !== "ACCEPTED") {
+    throw new AppError("Ride is not in ACCEPTED status.", 400);
+  }
+
+  if (!driverId || ride.driverId !== driverId) {
+    throw new AppError("You are not authorized to start this ride.", 403);
+  }
+
   const payload = {
     rideId,
     status: "IN_TRANSIT",
@@ -531,7 +632,7 @@ const startRideService = async (rideId: string, driverId?: string) => {
  * Transactionally updates Ride to COMPLETED, Payment to CAPTURED,
  * and increments Driver balance with 90% take-home ($).
  */
-const completeRideService = async (rideId: string, customerId?: string) => {
+const completeRideService = async (rideId: string, userId?: string) => {
   const ride = await prisma.ride.findUnique({
     where: { id: rideId },
     include: {
@@ -547,6 +648,10 @@ const completeRideService = async (rideId: string, customerId?: string) => {
 
   if (ride.status !== "ACCEPTED") {
     throw new AppError("Only active rides can be completed.", 400);
+  }
+
+  if (!userId || (ride.customerId !== userId && ride.driverId !== userId)) {
+    throw new AppError("You are not authorized to complete this ride.", 403);
   }
 
   const grossFare = Number(ride.fare);
@@ -640,7 +745,7 @@ const cancelRideService = async (rideId: string, cancelledByUserId?: string) => 
     throw new AppError("Completed rides cannot be cancelled.", 400);
   }
 
-  if (ride.status === "NO_DRIVER_FOUND") {
+  if (ride.status === "NO_DRIVER_FOUND" || ride.status === "CANCELLED") {
     throw new AppError("This ride is already cancelled.", 400);
   }
 
@@ -650,7 +755,7 @@ const cancelRideService = async (rideId: string, cancelledByUserId?: string) => 
   await prisma.$transaction(async (tx) => {
     await tx.ride.update({
       where: { id: rideId },
-      data: { status: "NO_DRIVER_FOUND" },
+      data: { status: "CANCELLED" },
     });
 
     if (ride.payment) {
@@ -744,13 +849,29 @@ const getActiveRideService = async (userId: string, role?: string) => {
 /**
  * Get available requested rides for drivers
  */
-const getAvailableRidesService = async (driverId?: string) => {
-  const rides = await prisma.ride.findMany({
+const getAvailableRidesService = async (
+  driverId?: string,
+  requestedVehicleType?: string,
+) => {
+  let vehicleFilter = requestedVehicleType;
+
+  if (!vehicleFilter && driverId) {
+    const driver = await prisma.user.findUnique({
+      where: { id: driverId },
+      select: { vehicleType: true },
+    });
+    if (driver?.vehicleType) {
+      vehicleFilter = driver.vehicleType;
+    }
+  }
+
+  let rides = await prisma.ride.findMany({
     where: {
       status: "REQUESTED",
       createdAt: {
-        gte: new Date(Date.now() - 15 * 60 * 1000), // last 15 min
+        gte: new Date(Date.now() - 30 * 60 * 1000), // last 30 min
       },
+      ...(vehicleFilter ? { vehicleType: vehicleFilter as any } : {}),
     },
     include: {
       customer: true,
@@ -758,11 +879,31 @@ const getAvailableRidesService = async (driverId?: string) => {
     orderBy: { createdAt: "desc" },
   });
 
+  // If no rides match the specific vehicle type, return all available requested rides
+  // so no online driver is left blind to active ride requests!
+  if (rides.length === 0 && vehicleFilter) {
+    rides = await prisma.ride.findMany({
+      where: {
+        status: "REQUESTED",
+        createdAt: {
+          gte: new Date(Date.now() - 30 * 60 * 1000),
+        },
+      },
+      include: {
+        customer: true,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
   return rides.map((ride) => {
     const grossFare = Number(ride.fare);
     const netEarnings = Number((grossFare * 0.9).toFixed(2));
     return {
       id: ride.id,
+      pickup: (ride as any).pickup || "Pickup Location",
+      destination: (ride as any).destination || "Destination Drop-off",
+      pickupDistanceKm: 0.5,
       pickupLat: Number(ride.pickupLat),
       pickupLng: Number(ride.pickupLng),
       destinationLat: Number(ride.destinationLat),
@@ -775,6 +916,7 @@ const getAvailableRidesService = async (driverId?: string) => {
       customerRating: "4.9",
       radiusKm: Number(ride.currentRadiusKm),
       createdAt: ride.createdAt.toISOString(),
+      expiresInSeconds: 30,
     };
   });
 };
@@ -785,8 +927,8 @@ const getAvailableRidesService = async (driverId?: string) => {
 const getRideHistoryService = async (userId: string, role?: string) => {
   const isDriver = role === "DRIVER";
   const whereClause = isDriver
-    ? { driverId: userId, status: { in: ["COMPLETED" as const, "NO_DRIVER_FOUND" as const] } }
-    : { customerId: userId, status: { in: ["COMPLETED" as const, "NO_DRIVER_FOUND" as const] } };
+    ? { driverId: userId, status: { in: ["COMPLETED" as const, "NO_DRIVER_FOUND" as const, "CANCELLED" as const] } }
+    : { customerId: userId, status: { in: ["COMPLETED" as const, "NO_DRIVER_FOUND" as const, "CANCELLED" as const] } };
 
   const rides = await prisma.ride.findMany({
     where: whereClause,

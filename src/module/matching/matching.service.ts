@@ -1,9 +1,17 @@
 import calculateHaversineDistance from "../../utils/haversine.js";
 import prisma from "../../lib/prisma.js";
-import { emitToDrivers, emitToUser, emitToRide } from "../../lib/socket.js";
+import {
+  emitToDrivers,
+  emitToUser,
+  emitToRide,
+  emitToDriverVehicle,
+} from "../../lib/socket.js";
 
 export interface RideOfferPayload {
   id: string;
+  pickup?: string;
+  destination?: string;
+  pickupDistanceKm?: number;
   pickupLat: number;
   pickupLng: number;
   destinationLat: number;
@@ -36,19 +44,20 @@ export const clearMatchingTimers = (rideId: string) => {
 };
 
 /**
- * Finds online drivers matching the vehicle type within the specified radius.
+ * Finds all active online drivers who are free to take a ride (no radius restriction).
+ * Prioritizes matching vehicle type, but falls back to all online drivers if none match.
  */
 export const findEligibleDrivers = async (
-  pickupLat: number,
-  pickupLng: number,
-  vehicleType: "BIKE" | "CAR",
-  radiusKm: number,
+  _pickupLat?: number,
+  _pickupLng?: number,
+  vehicleType?: "BIKE" | "CAR",
+  _radiusKm?: number,
 ) => {
   const drivers = await prisma.user.findMany({
     where: {
       role: "DRIVER",
       isOnline: true,
-      vehicleType,
+      ...(vehicleType ? { vehicleType } : {}),
     },
     include: {
       ridesAsDriver: {
@@ -59,28 +68,34 @@ export const findEligibleDrivers = async (
     },
   });
 
-  // Filter out drivers who already have an active ride
-  const freeDrivers = drivers.filter((d) => d.ridesAsDriver.length === 0);
+  let freeDrivers = drivers.filter((d) => d.ridesAsDriver.length === 0);
 
-  return freeDrivers.filter((driver) => {
-    // If driver coordinates are known, check Haversine distance
-    if (driver.lat !== null && driver.lng !== null) {
-      const dist = calculateHaversineDistance(
-        pickupLat,
-        pickupLng,
-        Number(driver.lat),
-        Number(driver.lng),
-      );
-      return dist <= radiusKm;
-    }
-    // If coordinates are not yet published, include them to allow demo testing
-    return true;
-  });
+  // If no driver of the exact vehicleType is found online, notify ALL online free drivers
+  // so no ride request is ever dropped!
+  if (freeDrivers.length === 0) {
+    const allDrivers = await prisma.user.findMany({
+      where: {
+        role: "DRIVER",
+        isOnline: true,
+      },
+      include: {
+        ridesAsDriver: {
+          where: {
+            status: { in: ["REQUESTED", "ACCEPTED"] },
+          },
+        },
+      },
+    });
+    freeDrivers = allDrivers.filter((d) => d.ridesAsDriver.length === 0);
+  }
+
+  // NO RADIUS LIMIT: Return all active online free drivers immediately
+  return freeDrivers;
 };
 
 /**
- * Publishes ride offer to online drivers in a 2km radius,
- * with automatic 30s expansion to 4km, and 60s refund timeout.
+ * Publishes ride offer to all online drivers without radius limits,
+ * with a 10-minute matching window before refund timeout.
  */
 export const publishRideOffer = async (rideId: string) => {
   // Clear any pre-existing timers for this rideId
@@ -98,6 +113,9 @@ export const publishRideOffer = async (rideId: string) => {
   const netEarnings = Number((Number(ride.fare) * 0.9).toFixed(2));
   const payload: RideOfferPayload = {
     id: ride.id,
+    pickup: (ride as any).pickup || "Pickup Point",
+    destination: (ride as any).destination || "Drop-off Location",
+    pickupDistanceKm: 0.5,
     pickupLat: Number(ride.pickupLat),
     pickupLng: Number(ride.pickupLng),
     destinationLat: Number(ride.destinationLat),
@@ -108,65 +126,27 @@ export const publishRideOffer = async (rideId: string) => {
     netEarnings,
     customerName: ride.customer?.name || "Customer",
     customerRating: "4.9",
-    radiusKm: 2.0,
+    radiusKm: 25.0,
     createdAt: new Date().toISOString(),
   };
 
-  // --- Round 1: 2.0 km immediate dispatch ---
-  const eligibleDriversRound1 = await findEligibleDrivers(
+  // Find all active free drivers without radius restriction
+  const eligibleDrivers = await findEligibleDrivers(
     payload.pickupLat,
     payload.pickupLng,
     payload.vehicleType,
-    2.0,
   );
 
-  for (const driver of eligibleDriversRound1) {
-    emitToUser(driver.id, "ride:new", payload);
+  for (const driver of eligibleDrivers) {
+    emitToUser(driver.id, "ride:requested", payload);
   }
-  // Broadcast to online drivers channel
-  emitToDrivers("ride:new", payload);
+
+  // Broadcast cleanly to online drivers and vehicle pool
+  emitToDrivers("ride:requested", payload, payload.vehicleType);
 
   const timers: NodeJS.Timeout[] = [];
 
-  // --- Round 2: 30-Second Expansion to 4.0 km ---
-  const expansionTimer = setTimeout(async () => {
-    try {
-      const currentRide = await prisma.ride.findUnique({
-        where: { id: rideId },
-      });
-
-      if (!currentRide || currentRide.status !== "REQUESTED") {
-        clearMatchingTimers(rideId);
-        return; // Ride already accepted or cancelled
-      }
-
-      // Expand radius in database
-      await prisma.ride.update({
-        where: { id: rideId },
-        data: { currentRadiusKm: 4.0 },
-      });
-
-      const expandedPayload = { ...payload, radiusKm: 4.0 };
-      const eligibleDriversRound2 = await findEligibleDrivers(
-        payload.pickupLat,
-        payload.pickupLng,
-        payload.vehicleType,
-        4.0,
-      );
-
-      for (const driver of eligibleDriversRound2) {
-        emitToUser(driver.id, "ride:new", expandedPayload);
-      }
-      emitToDrivers("ride:new", expandedPayload);
-      emitToRide(rideId, "ride:radius_expanded", { radiusKm: 4.0 });
-    } catch (err) {
-      console.error("Radius expansion error:", err);
-    }
-  }, 30000);
-
-  timers.push(expansionTimer);
-
-  // --- Round 3: 60-Second No Driver Found Timeout ---
+  // 10-minute (600s) timeout before no-driver refund (prevents premature timeout while driver is deciding)
   const timeoutTimer = setTimeout(async () => {
     try {
       const currentRide = await prisma.ride.findUnique({
@@ -192,7 +172,7 @@ export const publishRideOffer = async (rideId: string) => {
         emitToRide(rideId, "ride:no_driver", {
           rideId,
           message:
-            "No drivers available nearby. Your upfront payment hold has been refunded.",
+            "No drivers accepted this trip. Your upfront payment hold has been refunded.",
         });
         emitToUser(currentRide.customerId, "ride:no_driver", {
           rideId,
@@ -203,7 +183,7 @@ export const publishRideOffer = async (rideId: string) => {
     } finally {
       clearMatchingTimers(rideId);
     }
-  }, 60000);
+  }, 600000); // 10 minutes (600,000 ms)
 
   timers.push(timeoutTimer);
   activeMatchingTimers.set(rideId, timers);

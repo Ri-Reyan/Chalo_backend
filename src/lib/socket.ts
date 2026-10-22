@@ -24,11 +24,18 @@ export const initSocket = (server: HttpServer): SocketIOServer => {
     const initialUserId = query.userId as string | undefined;
     const initialRole = query.role as string | undefined;
     const initialRideId = query.rideId as string | undefined;
+    const initialVehicleType = query.vehicleType as string | undefined;
 
     if (initialUserId) {
       socket.join(`user:${initialUserId}`);
       if (initialRole === "DRIVER") {
         socket.join("drivers:online");
+        socket.join("drivers");
+        if (initialVehicleType) {
+          socket.join(`driver_vehicle_${initialVehicleType}`);
+          socket.join(`drivers_${initialVehicleType}`);
+          socket.join(`drivers:${initialVehicleType}`);
+        }
       }
     }
 
@@ -36,30 +43,91 @@ export const initSocket = (server: HttpServer): SocketIOServer => {
       socket.join(`ride:${initialRideId}`);
     }
 
+    // Explicit driver pool room subscription
+    socket.on(
+      "join:driver",
+      ({
+        vehicleType,
+        driverId,
+      }: {
+        vehicleType?: string;
+        driverId?: string;
+      } = {}) => {
+        socket.join("drivers:online");
+        socket.join("drivers");
+        if (vehicleType) {
+          socket.join(`driver_vehicle_${vehicleType}`);
+          socket.join(`drivers_${vehicleType}`);
+          socket.join(`drivers:${vehicleType}`);
+        }
+        if (driverId) {
+          socket.join(`user:${driverId}`);
+        }
+      },
+    );
+
     // Client explicitly joins personal user notification channel
     socket.on(
       "join:user",
-      ({ userId, role }: { userId: string; role?: string }) => {
+      ({
+        userId,
+        role,
+        vehicleType,
+      }: {
+        userId: string;
+        role?: string;
+        vehicleType?: string;
+      }) => {
         if (userId) {
           socket.join(`user:${userId}`);
           if (role === "DRIVER") {
             socket.join("drivers:online");
+            socket.join("drivers");
+            if (vehicleType) {
+              socket.join(`driver_vehicle_${vehicleType}`);
+              socket.join(`drivers_${vehicleType}`);
+              socket.join(`drivers:${vehicleType}`);
+            }
           }
         }
       },
     );
 
     // Driver toggling online channel
-    socket.on("driver:online", ({ driverId }: { driverId: string }) => {
-      if (driverId) {
-        socket.join(`user:${driverId}`);
+    socket.on(
+      "driver:online",
+      ({
+        driverId,
+        vehicleType,
+      }: {
+        driverId?: string;
+        vehicleType?: string;
+      } = {}) => {
         socket.join("drivers:online");
-      }
-    });
+        socket.join("drivers");
+        if (vehicleType) {
+          socket.join(`driver_vehicle_${vehicleType}`);
+          socket.join(`drivers_${vehicleType}`);
+          socket.join(`drivers:${vehicleType}`);
+        }
+        if (driverId) {
+          socket.join(`user:${driverId}`);
+        }
+      },
+    );
 
-    socket.on("driver:offline", () => {
-      socket.leave("drivers:online");
-    });
+    socket.on(
+      "driver:offline",
+      ({ vehicleType }: { vehicleType?: string } = {}) => {
+        socket.leave("drivers:online");
+        socket.leave("drivers");
+        if (vehicleType) {
+          socket.leave(`driver_vehicle_${vehicleType}`);
+          socket.leave(`drivers_${vehicleType}`);
+          socket.leave(`drivers:${vehicleType}`);
+        }
+      },
+    );
 
     // Customer or Driver joining specific ride room for live tracking
     socket.on("ride:join", ({ rideId }: { rideId: string }) => {
@@ -109,9 +177,31 @@ export const emitToUser = (userId: string, event: string, data: any) => {
   io.to(`user:${userId}`).emit(event, data);
 };
 
-export const emitToDrivers = (event: string, data: any) => {
+export const emitToDrivers = (
+  event: string,
+  data: any,
+  vehicleType?: string,
+) => {
   if (!io) return;
-  io.to("drivers:online").emit(event, data);
+  io.to("drivers:online").to("drivers").emit(event, data);
+  if (vehicleType) {
+    io.to(`driver_vehicle_${vehicleType}`)
+      .to(`drivers_${vehicleType}`)
+      .to(`drivers:${vehicleType}`)
+      .emit(event, data);
+  }
+};
+
+export const emitToDriverVehicle = (
+  vehicleType: string,
+  event: string,
+  data: any,
+) => {
+  if (!io) return;
+  io.to(`driver_vehicle_${vehicleType}`)
+    .to(`drivers_${vehicleType}`)
+    .to(`drivers:${vehicleType}`)
+    .emit(event, data);
 };
 
 export const emitToRide = (rideId: string, event: string, data: any) => {
