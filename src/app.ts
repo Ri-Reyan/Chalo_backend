@@ -11,11 +11,14 @@ import credentials from "./config/credentials.js";
 
 const app = express();
 
+// Trust reverse proxies (Render, Cloudflare, etc.) for secure cookies & HTTPS detection
+app.set("trust proxy", 1);
+
 const allowedOrigins = [
   "http://localhost:3000",
   "http://127.0.0.1:3000",
   credentials.client_url,
-];
+].filter(Boolean);
 
 app.use(
   cors({
@@ -27,6 +30,8 @@ app.use(
       }
     },
     credentials: true,
+    methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "Accept", "X-Requested-With"],
   }),
 );
 

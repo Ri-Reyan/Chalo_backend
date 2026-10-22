@@ -1,6 +1,10 @@
-import type { Request, Response } from "express";
+import type { Response } from "express";
 
-const isProduction = process.env.NODE_ENV === "production";
+const isProduction =
+  process.env.NODE_ENV === "production" ||
+  Boolean(process.env.RENDER) ||
+  Boolean(process.env.VERCEL) ||
+  Boolean(process.env.CLIENT_URL?.startsWith("https"));
 
 export const cookieOptions = {
   httpOnly: true,

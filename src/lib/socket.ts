@@ -1,5 +1,6 @@
 import { Server as SocketIOServer } from "socket.io";
 import type { Server as HttpServer } from "http";
+import credentials from "../config/credentials.js";
 
 let io: SocketIOServer | null = null;
 
@@ -9,6 +10,7 @@ export const initSocket = (server: HttpServer): SocketIOServer => {
       origin: [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        credentials.client_url as string,
       ],
       credentials: true,
       methods: ["GET", "POST", "PATCH", "PUT", "DELETE"],
@@ -35,14 +37,17 @@ export const initSocket = (server: HttpServer): SocketIOServer => {
     }
 
     // Client explicitly joins personal user notification channel
-    socket.on("join:user", ({ userId, role }: { userId: string; role?: string }) => {
-      if (userId) {
-        socket.join(`user:${userId}`);
-        if (role === "DRIVER") {
-          socket.join("drivers:online");
+    socket.on(
+      "join:user",
+      ({ userId, role }: { userId: string; role?: string }) => {
+        if (userId) {
+          socket.join(`user:${userId}`);
+          if (role === "DRIVER") {
+            socket.join("drivers:online");
+          }
         }
-      }
-    });
+      },
+    );
 
     // Driver toggling online channel
     socket.on("driver:online", ({ driverId }: { driverId: string }) => {
@@ -92,7 +97,9 @@ export const initSocket = (server: HttpServer): SocketIOServer => {
 
 export const getIO = (): SocketIOServer => {
   if (!io) {
-    throw new Error("Socket.IO is not initialized yet. Call initSocket(server) first.");
+    throw new Error(
+      "Socket.IO is not initialized yet. Call initSocket(server) first.",
+    );
   }
   return io;
 };
@@ -111,4 +118,3 @@ export const emitToRide = (rideId: string, event: string, data: any) => {
   if (!io) return;
   io.to(`ride:${rideId}`).emit(event, data);
 };
-
